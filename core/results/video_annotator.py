@@ -8,6 +8,7 @@ from typing import Dict, List, Optional, Tuple
 import cv2
 import numpy as np
 
+from core.detection.landmark_detector import RoadLandmark
 from core.detection.tracker import VehicleTrack
 from core.motion.ego_speed import EgoSpeedResult
 from core.motion.road_grid import RoadGrid
@@ -16,7 +17,7 @@ from core.speed.vehicle_speed import VehicleDirection, VehicleSpeedResult
 
 class VideoAnnotator:
     """
-    Renders telemetry overlays, bounding boxes, road grids, and speed results onto video frames.
+    Renders telemetry overlays, bounding boxes, road grids, landmarks, and speed results onto video frames.
     """
 
     def __init__(self):
@@ -33,6 +34,8 @@ class VideoAnnotator:
         show_trajectories: bool = True,
         road_grid: Optional[RoadGrid] = None,
         show_road_grid: bool = True,
+        landmarks: Optional[List[RoadLandmark]] = None,
+        show_landmarks: bool = True,
     ) -> np.ndarray:
         """
         Draws comprehensive annotations on the given frame.
@@ -46,6 +49,10 @@ class VideoAnnotator:
         # 0. Imaginary Road Grid Overlay
         if show_road_grid and road_grid is not None:
             self._draw_road_grid(vis, road_grid, ego_speed)
+
+        # 0.5. Stationary Road Landmarks & Markings Overlay
+        if show_landmarks and landmarks:
+            self._draw_landmarks(vis, landmarks)
 
         # 1. Top HUD: Ego Vehicle Telemetry
         self._draw_ego_hud(vis, ego_speed, timestamp, frame_idx)
@@ -116,6 +123,23 @@ class VideoAnnotator:
 
         # Blend grid onto original frame with transparency
         cv2.addWeighted(overlay, 0.45, vis, 0.55, 0, vis)
+
+    def _draw_landmarks(self, vis: np.ndarray, landmarks: List[RoadLandmark]) -> None:
+        """Draws detected stationary road markings, dashed lines, and poles."""
+        for lm in landmarks:
+            x1, y1, x2, y2 = [int(round(v)) for v in lm.bbox]
+            if lm.class_name == "lane_dash":
+                color = (0, 255, 128)  # Bright green/mint
+                lbl = "DASH"
+            elif lm.class_name == "pole":
+                color = (0, 215, 255)  # Gold/Yellow
+                lbl = "POLE"
+            else:
+                color = (255, 200, 50)  # Teal/Cyan
+                lbl = "MARK"
+
+            cv2.rectangle(vis, (x1, y1), (x2, y2), color, 1)
+            cv2.putText(vis, lbl, (x1, max(12, y1 - 3)), self.font, 0.35, color, 1, cv2.LINE_AA)
 
     def _draw_ego_hud(
         self,

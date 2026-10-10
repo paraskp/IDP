@@ -19,6 +19,7 @@ from core.detection import (
     SyntheticVehicleDetector,
     YOLOVehicleDetector,
 )
+from core.detection.landmark_detector import HybridLandmarkDetector
 from core.motion import (
     EgoSpeedEstimator,
     EgoSpeedResult,
@@ -26,6 +27,8 @@ from core.motion import (
     StationaryFeatureDetector,
     VisualOdometry,
 )
+from core.motion.landmark_speed import LandmarkSpeedTracker
+from core.motion.optical_flow import TrackingFrameResult
 from core.pipeline.stages import PipelineStage
 from core.results import (
     VideoAnnotator,
@@ -194,6 +197,8 @@ class PipelineOrchestrator:
             camera_height_meters=self.camera_height,
         )
         speed_est = VehicleSpeedEstimator(depth_est)
+        landmark_detector = HybridLandmarkDetector()
+        landmark_tracker = LandmarkSpeedTracker()
         annotator = VideoAnnotator()
 
         writer = None
@@ -239,12 +244,33 @@ class PipelineOrchestrator:
                 # 2. Track vehicles (Stage 7)
                 active_tracks = vehicle_tracker.update(detections, t_sec, idx)
 
+                # 2.5 Detect Stationary Road Landmarks & Markings
+                road_mask = ego_speed_est.road_grid.create_road_grid_mask((meta.height, meta.width))
+                landmarks = landmark_detector.detect(curr_bgr, road_roi_mask=road_mask)
+                _ = landmark_tracker.update_dash_frequency(landmarks, t_sec, 1.0 / meta.fps)
+
                 # 3. Optical Flow & Stationary Feature Motion (Stages 3 & 4)
                 ego_speed_res = None
                 if prev_gray is not None:
                     # Detect features avoiding detected vehicles
                     pts_prev = feature_detector.detect(prev_gray, dynamic_boxes=dynamic_boxes)
                     tracking_res = flow_tracker.track(prev_gray, curr_gray, pts_prev)
+
+                    # Filter optical flow matches strictly against detected stationary landmarks if available
+                    anchored_matches = landmark_tracker.filter_features_to_landmarks(
+                        tracking_res.inlier_matches, landmarks
+                    )
+                    if len(anchored_matches) >= 4:
+                        tracking_res = TrackingFrameResult(
+                            matches=anchored_matches,
+                            inlier_matches=anchored_matches,
+                            rejected_matches=tracking_res.rejected_matches,
+                            mean_displacement=tracking_res.mean_displacement,
+                            median_speed_px=tracking_res.median_speed_px,
+                            tracking_ratio=tracking_res.tracking_ratio,
+                            confidence=min(0.95, tracking_res.confidence + 0.1),
+                        )
+
                     pose_res = vo.estimate_motion(tracking_res)
 
                     # 4. Ego Speed Estimation (Stage 5)
@@ -297,6 +323,8 @@ class PipelineOrchestrator:
                         speed_results,
                         road_grid=ego_speed_est.road_grid,
                         show_road_grid=True,
+                        landmarks=landmarks,
+                        show_landmarks=True,
                     )
                     writer.write_frame(annotated)
 
