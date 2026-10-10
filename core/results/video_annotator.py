@@ -10,12 +10,13 @@ import numpy as np
 
 from core.detection.tracker import VehicleTrack
 from core.motion.ego_speed import EgoSpeedResult
+from core.motion.road_grid import RoadGrid
 from core.speed.vehicle_speed import VehicleDirection, VehicleSpeedResult
 
 
 class VideoAnnotator:
     """
-    Renders telemetry overlays, bounding boxes, and speed results onto video frames.
+    Renders telemetry overlays, bounding boxes, road grids, and speed results onto video frames.
     """
 
     def __init__(self):
@@ -30,6 +31,8 @@ class VideoAnnotator:
         tracks: List[VehicleTrack],
         speed_results: Dict[int, VehicleSpeedResult],
         show_trajectories: bool = True,
+        road_grid: Optional[RoadGrid] = None,
+        show_road_grid: bool = True,
     ) -> np.ndarray:
         """
         Draws comprehensive annotations on the given frame.
@@ -39,6 +42,10 @@ class VideoAnnotator:
         """
         vis = frame.copy()
         h, w = vis.shape[:2]
+
+        # 0. Imaginary Road Grid Overlay
+        if show_road_grid and road_grid is not None:
+            self._draw_road_grid(vis, road_grid, ego_speed)
 
         # 1. Top HUD: Ego Vehicle Telemetry
         self._draw_ego_hud(vis, ego_speed, timestamp, frame_idx)
@@ -79,6 +86,37 @@ class VideoAnnotator:
 
         return vis
 
+    def _draw_road_grid(
+        self,
+        vis: np.ndarray,
+        road_grid: RoadGrid,
+        ego_speed: Optional[EgoSpeedResult],
+    ) -> None:
+        """
+        Renders the imaginary perspective road grid directly onto the road surface.
+        """
+        overlay = vis.copy()
+        grid_data = road_grid.generate_grid_overlay(vis.shape[:2], max_depth_lines=18)
+
+        grid_color = (220, 200, 0)      # BGR Cyan/Teal
+        accent_color = (0, 255, 200)    # Greenish cyan
+
+        # Draw subtle shaded grid tiles in checkerboard fashion
+        for idx, cell in enumerate(grid_data.get("grid_cells", [])):
+            if idx % 2 == 0:
+                cv2.fillPoly(overlay, [cell], (80, 60, 20))
+
+        # Draw transversal lines
+        for (u0, v0), (u1, v1) in grid_data.get("transversal_lines", []):
+            cv2.line(overlay, (u0, v0), (u1, v1), grid_color, 1, cv2.LINE_AA)
+
+        # Draw longitudinal lines
+        for (u0, v0), (u1, v1) in grid_data.get("longitudinal_lines", []):
+            cv2.line(overlay, (u0, v0), (u1, v1), accent_color, 1, cv2.LINE_AA)
+
+        # Blend grid onto original frame with transparency
+        cv2.addWeighted(overlay, 0.45, vis, 0.55, 0, vis)
+
     def _draw_ego_hud(
         self,
         vis: np.ndarray,
@@ -101,14 +139,19 @@ class VideoAnnotator:
         time_str = f"{mins:02d}:{secs:05.2f} (F#{frame_idx:04d})"
         cv2.putText(vis, time_str, (20, 35), self.font, 0.65, (200, 200, 200), 1, cv2.LINE_AA)
 
-        # Ego Speed
+        # Ego Speed & Grid Telemetry
         if ego_speed and ego_speed.speed_kmh is not None:
-            ego_text = f"EGO SPEED: {ego_speed.speed_kmh:.1f} km/h"
-            conf_text = f"Conf: {ego_speed.confidence * 100:.0f}%"
-            cv2.putText(vis, ego_text, (w - 380, 35), self.font, 0.75, (50, 255, 50), 2, cv2.LINE_AA)
-            cv2.putText(vis, conf_text, (w - 120, 35), self.font, 0.55, (180, 180, 180), 1, cv2.LINE_AA)
+            ego_text = f"EGO: {ego_speed.speed_kmh:.1f} km/h"
+            cv2.putText(vis, ego_text, (w - 480, 35), self.font, 0.75, (50, 255, 50), 2, cv2.LINE_AA)
+
+            if ego_speed.squares_passed_per_second is not None:
+                grid_info = f"Grid: {ego_speed.squares_passed_per_second:.1f} sq/s ({ego_speed.grid_square_size_m:.1f}m)"
+                cv2.putText(vis, grid_info, (w - 280, 35), self.font, 0.52, (0, 220, 255), 1, cv2.LINE_AA)
+
+            conf_text = f"{ego_speed.confidence * 100:.0f}%"
+            cv2.putText(vis, conf_text, (w - 70, 35), self.font, 0.55, (180, 180, 180), 1, cv2.LINE_AA)
         else:
-            cv2.putText(vis, "EGO SPEED: Estimating...", (w - 360, 35), self.font, 0.65, (100, 200, 255), 1, cv2.LINE_AA)
+            cv2.putText(vis, "EGO SPEED: Estimating via Road Grid...", (w - 460, 35), self.font, 0.60, (100, 200, 255), 1, cv2.LINE_AA)
 
     def _draw_label_badge(
         self,

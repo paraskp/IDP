@@ -34,6 +34,7 @@ class AnalysisWorker(QThread):
         output_dir: Path,
         user_fov: Optional[float] = None,
         camera_height: float = 1.35,
+        square_size_meters: float = 1.0,
         generate_video: bool = True,
         sample_step: int = 1,
     ):
@@ -42,6 +43,7 @@ class AnalysisWorker(QThread):
         self.output_dir = output_dir
         self.user_fov = user_fov
         self.camera_height = camera_height
+        self.square_size = square_size_meters
         self.generate_video = generate_video
         self.sample_step = sample_step
         self._is_cancelled = False
@@ -57,6 +59,7 @@ class AnalysisWorker(QThread):
                 video_path=self.video_path,
                 user_fov_deg=self.user_fov,
                 camera_height_meters=self.camera_height,
+                square_size_meters=self.square_size,
                 is_user_calibrated_scale=(self.user_fov is not None),
             )
 

@@ -112,3 +112,82 @@ def test_ego_speed_estimator_on_synthetic_stream(sample_video_30fps: Path):
         assert r.timestamp > 0
         assert r.confidence >= 0.0
         assert len(r.scale_source) > 0
+
+
+def test_road_grid_projection_and_squares_passed(sample_video_30fps: Path):
+    """Verifies RoadGrid metric projection and squares-per-unit-time speed derivation."""
+    from core.motion.road_grid import RoadGrid
+
+    with VideoReader(sample_video_30fps) as reader:
+        frames = [reader.read_frame().frame for _ in range(5)]
+
+    calib = calibrate_scene(frames)
+    grid = RoadGrid(
+        camera_model=calib.camera_model,
+        road_geometry=calib.road_geometry,
+        camera_height_meters=1.35,
+        square_size_meters=1.0,
+    )
+
+    # 1. Test Invertibility between ground and image plane
+    x_test, z_test = 0.0, 15.0  # Center lane, 15 meters ahead
+    pix = grid.ground_to_pixel(x_test, z_test)
+    assert pix is not None
+    u, v = pix
+
+    ground_back = grid.project_pixel_to_ground(u, v)
+    assert ground_back is not None
+    assert pytest.approx(ground_back[0], abs=0.05) == x_test
+    assert pytest.approx(ground_back[1], abs=0.05) == z_test
+
+    # 2. Test squares traversed calculation for vehicle traveling at 20 m/s (72 km/h)
+    dt = 0.1  # 100 ms
+    speed_target_mps = 20.0
+    dz = speed_target_mps * dt  # 2.0 meters forward displacement = 2.0 grid squares
+
+    # Generate synthetic road points moving towards vehicle
+    pts_prev = []
+    pts_curr = []
+    for x_m in [-1.5, -0.5, 0.5, 1.5]:
+        for z_m in [10.0, 15.0, 20.0, 25.0]:
+            p0 = grid.ground_to_pixel(x_m, z_m)
+            p1 = grid.ground_to_pixel(x_m, z_m - dz)
+            if p0 is not None and p1 is not None:
+                pts_prev.append(p0)
+                pts_curr.append(p1)
+
+    pts_prev_arr = np.array(pts_prev, dtype=np.float32)
+    pts_curr_arr = np.array(pts_curr, dtype=np.float32)
+
+    motion_res = grid.calculate_squares_passed(pts_prev_arr, pts_curr_arr, dt=dt)
+    assert motion_res.is_valid
+    assert pytest.approx(motion_res.squares_passed_per_frame, abs=0.1) == 2.0
+    assert pytest.approx(motion_res.squares_passed_per_second, abs=1.0) == 20.0
+    assert pytest.approx(motion_res.raw_speed_mps, abs=1.0) == 20.0
+    assert pytest.approx(motion_res.raw_speed_kmh, abs=3.6) == 72.0
+
+
+def test_road_grid_overlay_and_mask(sample_video_30fps: Path):
+    """Verifies RoadGrid overlay generation and drivable road mask creation."""
+    from core.motion.road_grid import RoadGrid
+
+    with VideoReader(sample_video_30fps) as reader:
+        frames = [reader.read_frame().frame for _ in range(5)]
+
+    calib = calibrate_scene(frames)
+    grid = RoadGrid(
+        camera_model=calib.camera_model,
+        road_geometry=calib.road_geometry,
+        camera_height_meters=1.35,
+        square_size_meters=1.0,
+    )
+
+    overlay_data = grid.generate_grid_overlay((720, 1280))
+    assert len(overlay_data["longitudinal_lines"]) > 0
+    assert len(overlay_data["transversal_lines"]) > 0
+    assert len(overlay_data["grid_cells"]) > 0
+
+    mask = grid.create_road_grid_mask((720, 1280))
+    assert mask.shape == (720, 1280)
+    assert np.count_nonzero(mask) > 1000
+

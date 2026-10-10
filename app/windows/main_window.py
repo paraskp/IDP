@@ -214,6 +214,13 @@ if HAVE_PYSIDE6:
             self.height_spin.setRange(0.5, 4.0)
             self.height_spin.setValue(1.35)
             fov_row.addWidget(self.height_spin)
+
+            fov_row.addWidget(QLabel("Road Grid Square (m):"))
+            self.grid_size_spin = QDoubleSpinBox()
+            self.grid_size_spin.setRange(0.2, 5.0)
+            self.grid_size_spin.setValue(1.0)
+            self.grid_size_spin.setSingleStep(0.2)
+            fov_row.addWidget(self.grid_size_spin)
             fov_row.addStretch()
             calib_layout.addLayout(fov_row)
             layout.addWidget(calib_group)
@@ -378,12 +385,14 @@ if HAVE_PYSIDE6:
 
             user_fov = self.fov_spin.value() if self.manual_calib_cb.isChecked() else None
             camera_h = self.height_spin.value()
+            grid_sq_m = self.grid_size_spin.value()
 
             self.worker = AnalysisWorker(
                 video_path=self.selected_video,
                 output_dir=Path("outputs"),
                 user_fov=user_fov,
                 camera_height=camera_h,
+                square_size_meters=grid_sq_m,
                 generate_video=True,
                 sample_step=1,
             )

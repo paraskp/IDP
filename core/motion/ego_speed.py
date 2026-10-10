@@ -12,6 +12,7 @@ import numpy as np
 from core.calibration.camera import CameraModel
 from core.calibration.road_geometry import RoadGeometry
 from core.motion.optical_flow import TrackingFrameResult
+from core.motion.road_grid import GridMotionResult, RoadGrid
 from core.motion.visual_odometry import PoseEstimate
 
 
@@ -26,6 +27,9 @@ class EgoSpeedResult:
     confidence: float
     scale_source: str
     is_reliable: bool
+    squares_passed_per_second: Optional[float] = None
+    squares_passed_per_frame: Optional[float] = None
+    grid_square_size_m: float = 1.0
     reason: Optional[str] = None
 
 
@@ -101,14 +105,22 @@ class EgoSpeedEstimator:
         camera_model: CameraModel,
         road_geometry: RoadGeometry,
         camera_height_meters: float = 1.35,  # Nominal standard car mount height
+        square_size_meters: float = 1.0,     # Imaginary road grid square size in meters
         is_user_calibrated_scale: bool = False,
     ):
         self.camera_model = camera_model
         self.road_geom = road_geometry
         self.camera_height = camera_height_meters
+        self.square_size = square_size_meters
         self.is_user_calibrated = is_user_calibrated_scale
         self.filter = EgoSpeedKalmanFilter()
         self.last_timestamp: Optional[float] = None
+        self.road_grid = RoadGrid(
+            camera_model=camera_model,
+            road_geometry=road_geometry,
+            camera_height_meters=camera_height_meters,
+            square_size_meters=square_size_meters,
+        )
 
     def estimate_speed(
         self,
@@ -118,39 +130,47 @@ class EgoSpeedEstimator:
         pose_estimate: Optional[PoseEstimate] = None,
     ) -> EgoSpeedResult:
         """
-        Estimates metric ego speed for the current frame.
+        Estimates metric ego speed for the current frame using the imaginary road grid.
         """
         dt = (timestamp - self.last_timestamp) if self.last_timestamp is not None else (1.0 / 30.0)
         self.last_timestamp = timestamp
 
         inliers = tracking_result.inlier_matches
-        h_cam = self.camera_height
-        fy = self.camera_model.intrinsics.fy
-        vy = self.road_geom.vanishing_point[1]
 
-        # Calculate metric physical displacements of road features
-        metric_speeds: List[float] = []
+        # Calculate motion across the imaginary road grid
+        prev_pts = np.array([m.pt_prev for m in inliers], dtype=np.float32) if inliers else np.empty((0, 2), dtype=np.float32)
+        curr_pts = np.array([m.pt_curr for m in inliers], dtype=np.float32) if inliers else np.empty((0, 2), dtype=np.float32)
 
-        for m in inliers:
-            x0, y0 = m.pt_prev
-            x1, y1 = m.pt_curr
-
-            # Only consider features in lower road region below horizon
-            if y0 <= vy + 15 or y1 <= vy + 15:
-                continue
-
-            # Ground plane depth: Z = (fy * h_cam) / (y - vy)
-            z0 = (fy * h_cam) / (y0 - vy)
-            z1 = (fy * h_cam) / (y1 - vy)
-
-            dz = z0 - z1  # Forward displacement in meters
-            if 0 < dz < (120.0 * dt):  # Plausible physical displacement (<120 m/s)
-                speed_sample = dz / dt
-                metric_speeds.append(speed_sample)
+        grid_res = self.road_grid.calculate_squares_passed(prev_pts, curr_pts, dt)
 
         raw_speed_mps: Optional[float] = None
-        if len(metric_speeds) >= 3:
-            raw_speed_mps = float(np.median(metric_speeds))
+        squares_frame: Optional[float] = None
+        squares_sec: Optional[float] = None
+
+        if grid_res.is_valid:
+            raw_speed_mps = grid_res.raw_speed_mps
+            squares_frame = grid_res.squares_passed_per_frame
+            squares_sec = grid_res.squares_passed_per_second
+        elif inliers:
+            # Fallback point-by-point calculation if grid criteria wasn't fully met
+            h_cam = self.camera_height
+            fy = self.camera_model.intrinsics.fy
+            vy = self.road_geom.vanishing_point[1]
+            metric_speeds: List[float] = []
+            for m in inliers:
+                x0, y0 = m.pt_prev
+                x1, y1 = m.pt_curr
+                if y0 <= vy + 15 or y1 <= vy + 15:
+                    continue
+                z0 = (fy * h_cam) / (y0 - vy)
+                z1 = (fy * h_cam) / (y1 - vy)
+                dz = z0 - z1
+                if 0 < dz < (120.0 * dt):
+                    metric_speeds.append(dz / dt)
+            if len(metric_speeds) >= 3:
+                raw_speed_mps = float(np.median(metric_speeds))
+                squares_sec = round(raw_speed_mps / self.square_size, 2)
+                squares_frame = round((raw_speed_mps * dt) / self.square_size, 3)
 
         # Filter with Kalman model
         filtered_mps, acc = self.filter.update(dt, raw_speed_mps)
@@ -167,22 +187,29 @@ class EgoSpeedEstimator:
                 confidence=0.15,
                 scale_source="None (uncalibrated scene)",
                 is_reliable=False,
+                squares_passed_per_second=None,
+                squares_passed_per_frame=None,
+                grid_square_size_m=self.square_size,
                 reason="insufficient road plane constraints to recover metric scale",
             )
 
         scale_source = (
             "User Calibrated Ground Plane"
             if self.is_user_calibrated
-            else f"Road Geometry (Nominal Cam Height: {self.camera_height:.2f}m)"
+            else f"Road Grid (Nominal Cam Height: {self.camera_height:.2f}m, Sq: {self.square_size:.1f}m)"
         )
 
-        base_conf = tracking_result.confidence * 0.5 + (0.4 if len(metric_speeds) >= 5 else 0.2)
+        base_conf = (
+            grid_res.confidence * 0.7 + tracking_result.confidence * 0.3
+            if grid_res.is_valid
+            else tracking_result.confidence * 0.5
+        )
         if self.is_user_calibrated:
             base_conf = min(0.95, base_conf + 0.15)
         else:
-            base_conf = min(0.85, base_conf)
+            base_conf = min(0.88, base_conf)
 
-        is_reliable = len(metric_speeds) >= 3 and base_conf >= 0.4
+        is_reliable = (grid_res.is_valid or raw_speed_mps is not None) and base_conf >= 0.35
 
         return EgoSpeedResult(
             timestamp=timestamp,
@@ -193,5 +220,8 @@ class EgoSpeedEstimator:
             confidence=round(base_conf, 3),
             scale_source=scale_source,
             is_reliable=is_reliable,
-            reason=None if is_reliable else "sparse road feature tracking",
+            squares_passed_per_second=squares_sec if is_reliable else None,
+            squares_passed_per_frame=squares_frame if is_reliable else None,
+            grid_square_size_m=self.square_size,
+            reason=None if is_reliable else "sparse road grid feature tracking",
         )

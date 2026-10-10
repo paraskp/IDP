@@ -77,11 +77,13 @@ class PipelineOrchestrator:
         detector: Optional[BaseVehicleDetector] = None,
         user_fov_deg: Optional[float] = None,
         camera_height_meters: float = 1.35,
+        square_size_meters: float = 1.0,
         is_user_calibrated_scale: bool = False,
     ):
         self.video_path = Path(video_path).resolve()
         self.user_fov = user_fov_deg
         self.camera_height = camera_height_meters
+        self.square_size = square_size_meters
         self.is_user_calibrated = is_user_calibrated_scale
 
         # Default to YOLO detector, fall back to synthetic/color detector
@@ -182,6 +184,7 @@ class PipelineOrchestrator:
             camera_model=calib.camera_model,
             road_geometry=calib.road_geometry,
             camera_height_meters=self.camera_height,
+            square_size_meters=self.square_size,
             is_user_calibrated_scale=self.is_user_calibrated,
         )
         vehicle_tracker = ByteVehicleTracker(high_score_thresh=0.4, min_hits_to_confirm=2)
@@ -257,6 +260,9 @@ class PipelineOrchestrator:
                         "acceleration_mps2": ego_speed_res.acceleration_mps2,
                         "confidence": ego_speed_res.confidence,
                         "scale_source": ego_speed_res.scale_source,
+                        "squares_passed_per_second": ego_speed_res.squares_passed_per_second,
+                        "squares_passed_per_frame": ego_speed_res.squares_passed_per_frame,
+                        "grid_square_size_m": ego_speed_res.grid_square_size_m,
                     })
 
                 # 5. Surrounding Vehicle Speed Estimation (Stages 8 & 9)
@@ -289,6 +295,8 @@ class PipelineOrchestrator:
                         ego_speed_res,
                         active_tracks,
                         speed_results,
+                        road_grid=ego_speed_est.road_grid,
+                        show_road_grid=True,
                     )
                     writer.write_frame(annotated)
 
