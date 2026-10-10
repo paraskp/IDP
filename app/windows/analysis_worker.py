@@ -37,6 +37,7 @@ class AnalysisWorker(QThread):
         square_size_meters: float = 1.0,
         generate_video: bool = True,
         sample_step: int = 1,
+        ego_only: bool = True,
     ):
         super().__init__()
         self.video_path = video_path
@@ -46,6 +47,7 @@ class AnalysisWorker(QThread):
         self.square_size = square_size_meters
         self.generate_video = generate_video
         self.sample_step = sample_step
+        self.ego_only = ego_only
         self._is_cancelled = False
 
     def cancel(self) -> None:
@@ -61,6 +63,7 @@ class AnalysisWorker(QThread):
                 camera_height_meters=self.camera_height,
                 square_size_meters=self.square_size,
                 is_user_calibrated_scale=(self.user_fov is not None),
+                ego_only=self.ego_only,
             )
 
             def on_progress(fraction: float, message: str):

@@ -82,20 +82,25 @@ class PipelineOrchestrator:
         camera_height_meters: float = 1.35,
         square_size_meters: float = 1.0,
         is_user_calibrated_scale: bool = False,
+        ego_only: bool = True,
     ):
         self.video_path = Path(video_path).resolve()
         self.user_fov = user_fov_deg
         self.camera_height = camera_height_meters
         self.square_size = square_size_meters
         self.is_user_calibrated = is_user_calibrated_scale
+        self.ego_only = ego_only
 
-        # Default to YOLO detector, fall back to synthetic/color detector
-        self.fallback_detector = SyntheticVehicleDetector()
-        if detector is not None:
-            self.detector = detector
+        # Default to YOLO detector if full mode is active, otherwise dormant
+        self.fallback_detector = SyntheticVehicleDetector() if not ego_only else None
+        if not ego_only:
+            if detector is not None:
+                self.detector = detector
+            else:
+                yolo = YOLOVehicleDetector()
+                self.detector = yolo if yolo._model is not None else self.fallback_detector
         else:
-            yolo = YOLOVehicleDetector()
-            self.detector = yolo if yolo._model is not None else self.fallback_detector
+            self.detector = None
 
         self.current_stage: PipelineStage = PipelineStage.VIDEO_INPUT
         self.validation = None
@@ -235,14 +240,15 @@ class PipelineOrchestrator:
                         f"Analyzing frame #{idx:04d} ({frac * 100:.0f}%)...",
                     )
 
-                # 1. Detect vehicles (Stage 6)
-                detections = self.detector.detect(curr_bgr)
-                if not detections and self.fallback_detector is not None:
-                    detections = self.fallback_detector.detect(curr_bgr)
-                dynamic_boxes = [(int(d.x1), int(d.y1), int(d.x2), int(d.y2)) for d in detections]
-
-                # 2. Track vehicles (Stage 7)
-                active_tracks = vehicle_tracker.update(detections, t_sec, idx)
+                # 1 & 2. Surrounding Vehicle Detection & Tracking (Dormant when ego_only=True)
+                active_tracks = []
+                dynamic_boxes = []
+                if not self.ego_only:
+                    detections = self.detector.detect(curr_bgr) if self.detector else []
+                    if not detections and self.fallback_detector is not None:
+                        detections = self.fallback_detector.detect(curr_bgr)
+                    dynamic_boxes = [(int(d.x1), int(d.y1), int(d.x2), int(d.y2)) for d in detections]
+                    active_tracks = vehicle_tracker.update(detections, t_sec, idx)
 
                 # 2.5 Detect Stationary Road Landmarks & Markings
                 road_mask = ego_speed_est.road_grid.create_road_grid_mask((meta.height, meta.width))
@@ -291,26 +297,27 @@ class PipelineOrchestrator:
                         "grid_square_size_m": ego_speed_res.grid_square_size_m,
                     })
 
-                # 5. Surrounding Vehicle Speed Estimation (Stages 8 & 9)
+                # 5. Surrounding Vehicle Speed Estimation (Dormant when ego_only=True)
                 speed_results: Dict[int, VehicleSpeedResult] = {}
-                for track in active_tracks:
-                    vres = speed_est.estimate_vehicle_speed(track, t_sec, ego_speed_res)
-                    speed_results[track.track_id] = vres
+                if not self.ego_only:
+                    for track in active_tracks:
+                        vres = speed_est.estimate_vehicle_speed(track, t_sec, ego_speed_res)
+                        speed_results[track.track_id] = vres
 
-                    vehicle_records.append({
-                        "timestamp": t_sec,
-                        "frame_index": idx,
-                        "ego_speed": ego_speed_res.speed_kmh if ego_speed_res else None,
-                        "vehicle_id": track.track_id,
-                        "vehicle_class": track.class_name,
-                        "vehicle_speed": vres.speed_kmh,
-                        "relative_speed": vres.relative_speed_kmh,
-                        "direction": vres.direction.value,
-                        "depth_meters": vres.depth_meters,
-                        "lateral_meters": vres.lateral_meters,
-                        "confidence": vres.confidence,
-                        "scale_source": vres.scale_source,
-                    })
+                        vehicle_records.append({
+                            "timestamp": t_sec,
+                            "frame_index": idx,
+                            "ego_speed": ego_speed_res.speed_kmh if ego_speed_res else None,
+                            "vehicle_id": track.track_id,
+                            "vehicle_class": track.class_name,
+                            "vehicle_speed": vres.speed_kmh,
+                            "relative_speed": vres.relative_speed_kmh,
+                            "direction": vres.direction.value,
+                            "depth_meters": vres.depth_meters,
+                            "lateral_meters": vres.lateral_meters,
+                            "confidence": vres.confidence,
+                            "scale_source": vres.scale_source,
+                        })
 
                 # 6. Render annotations and write frame (Stage 10)
                 if writer is not None:
@@ -325,6 +332,7 @@ class PipelineOrchestrator:
                         show_road_grid=True,
                         landmarks=landmarks,
                         show_landmarks=True,
+                        ego_only=self.ego_only,
                     )
                     writer.write_frame(annotated)
 

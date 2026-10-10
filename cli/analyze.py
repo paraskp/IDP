@@ -87,14 +87,16 @@ def run_full_pipeline(
     sample_step: int = 1,
     user_fov: float = None,
     camera_height: float = 1.35,
+    ego_only: bool = True,
     as_json: bool = False,
 ) -> int:
-    """Runs complete 10-stage end-to-end analysis pipeline."""
+    """Runs complete analysis pipeline (ego-only by default)."""
     orchestrator = PipelineOrchestrator(
         video_path=video_path,
         user_fov_deg=user_fov,
         camera_height_meters=camera_height,
         is_user_calibrated_scale=(user_fov is not None),
+        ego_only=ego_only,
     )
 
     def print_progress(fraction: float, message: str):
@@ -193,6 +195,11 @@ def main() -> None:
         action="store_true",
         help="Output results in JSON format",
     )
+    parser.add_argument(
+        "--all-traffic",
+        action="store_true",
+        help="Enable surrounding vehicle detection and tracking (default is ego-only)",
+    )
 
     args = parser.parse_args()
     v_path = Path(args.video_path)
@@ -208,6 +215,7 @@ def main() -> None:
                 sample_step=args.step,
                 user_fov=args.fov,
                 camera_height=args.camera_height,
+                ego_only=not args.all_traffic,
                 as_json=args.json,
             )
         sys.exit(code)

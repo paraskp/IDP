@@ -395,6 +395,7 @@ if HAVE_PYSIDE6:
                 square_size_meters=grid_sq_m,
                 generate_video=True,
                 sample_step=1,
+                ego_only=True,
             )
             self.worker.sig_progress.connect(self._on_worker_progress)
             self.worker.sig_finished.connect(self._on_worker_finished)
@@ -427,11 +428,14 @@ if HAVE_PYSIDE6:
             # Cards
             avg_ego = res.summary["ego_vehicle"]["average_speed_kmh"]
             max_ego = res.summary["ego_vehicle"]["max_speed_kmh"]
-            self.card_ego.setText(f"Ego Vehicle:\nAvg: {avg_ego:.1f} km/h | Max: {max_ego:.1f} km/h")
+            self.card_ego.setText(f"Ego Vehicle (Own Car):\nAvg: {avg_ego:.1f} km/h | Max: {max_ego:.1f} km/h")
 
-            num_veh = res.summary["total_unique_vehicles"]
+            num_veh = res.summary.get("total_unique_vehicles", 0)
             avg_veh = res.summary["surrounding_vehicles"]["average_speed_kmh"]
-            self.card_vehs.setText(f"Surrounding Traffic:\nTracked: {num_veh} vehicles | Avg: {avg_veh:.1f} km/h")
+            if res.vehicle_records:
+                self.card_vehs.setText(f"Surrounding Traffic:\nTracked: {num_veh} vehicles | Avg: {avg_veh:.1f} km/h")
+            else:
+                self.card_vehs.setText("Surrounding Traffic:\nDormant (Ego-Only Analysis Mode)")
 
             scale_src = res.calibration.scale_source
             fov_val = res.calibration.fov_estimate.fov_h_deg

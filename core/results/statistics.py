@@ -77,33 +77,52 @@ def generate_speed_plots(
         ego_times = [r["timestamp"] for r in ego_records]
         ego_spds = [r["speed_kmh"] if r.get("speed_kmh") is not None else np.nan for r in ego_records]
 
-        ax1.plot(ego_times, ego_spds, color="#00ff88", linewidth=2.0, label="Ego Vehicle Speed (km/h)")
+        ax1.plot(ego_times, ego_spds, color="#00ff88", linewidth=2.2, label="Ego Vehicle Speed (km/h)")
         ax1.set_ylabel("Speed (km/h)")
-        ax1.set_title("Ego Vehicle Speed Profile")
-        ax1.legend(facecolor="#333333", labelcolor="white")
+        ax1.set_title("Ego Vehicle Longitudinal Speed Profile")
+        ax1.legend(facecolor="#333333", labelcolor="white", loc="upper left")
 
-        # Bottom Plot: Surrounding Vehicles
-        # Group by vehicle_id
-        by_vehicle: Dict[int, Tuple[List[float], List[float]]] = {}
-        for r in vehicle_records:
-            vid = r.get("vehicle_id")
-            spd = r.get("vehicle_speed")
-            if vid and spd is not None:
-                if vid not in by_vehicle:
-                    by_vehicle[vid] = ([], [])
-                by_vehicle[vid][0].append(r["timestamp"])
-                by_vehicle[vid][1].append(spd)
+        # Bottom Plot: Grid Square Dynamics (when ego_only / no vehicle records) or Surrounding Vehicles
+        if not vehicle_records:
+            grid_rates = [
+                r.get("squares_passed_per_second")
+                if r.get("squares_passed_per_second") is not None
+                else np.nan
+                for r in ego_records
+            ]
+            ax2.plot(
+                ego_times,
+                grid_rates,
+                color="#00d4ff",
+                linewidth=1.8,
+                label="Road Grid Traversal Rate (squares/sec)",
+            )
+            ax2.set_xlabel("Time (seconds)")
+            ax2.set_ylabel("Squares / Sec")
+            ax2.set_title("Imaginary Road Grid Dynamics (1.0m Squares)")
+            ax2.legend(facecolor="#333333", labelcolor="white", loc="upper left")
+        else:
+            # Group by vehicle_id
+            by_vehicle: Dict[int, Tuple[List[float], List[float]]] = {}
+            for r in vehicle_records:
+                vid = r.get("vehicle_id")
+                spd = r.get("vehicle_speed")
+                if vid and spd is not None:
+                    if vid not in by_vehicle:
+                        by_vehicle[vid] = ([], [])
+                    by_vehicle[vid][0].append(r["timestamp"])
+                    by_vehicle[vid][1].append(spd)
 
-        colors = ["#ffaa00", "#00d4ff", "#ff0077", "#aaff00", "#ff00ee"]
-        for idx, (vid, (v_times, v_spds)) in enumerate(by_vehicle.items()):
-            c = colors[idx % len(colors)]
-            ax2.plot(v_times, v_spds, marker="o", markersize=3, linestyle="-", color=c, label=f"Vehicle #{vid}")
+            colors = ["#ffaa00", "#00d4ff", "#ff0077", "#aaff00", "#ff00ee"]
+            for idx, (vid, (v_times, v_spds)) in enumerate(by_vehicle.items()):
+                c = colors[idx % len(colors)]
+                ax2.plot(v_times, v_spds, marker="o", markersize=3, linestyle="-", color=c, label=f"Vehicle #{vid}")
 
-        ax2.set_xlabel("Time (seconds)")
-        ax2.set_ylabel("Speed (km/h)")
-        ax2.set_title("Surrounding Vehicles Speed Profile")
-        if by_vehicle:
-            ax2.legend(facecolor="#333333", labelcolor="white", loc="upper right")
+            ax2.set_xlabel("Time (seconds)")
+            ax2.set_ylabel("Speed (km/h)")
+            ax2.set_title("Surrounding Vehicles Speed Profile")
+            if by_vehicle:
+                ax2.legend(facecolor="#333333", labelcolor="white", loc="upper right")
 
         plt.tight_layout()
         plt.savefig(out_file, dpi=150, facecolor=fig.get_facecolor(), edgecolor="none")

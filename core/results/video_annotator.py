@@ -36,6 +36,7 @@ class VideoAnnotator:
         show_road_grid: bool = True,
         landmarks: Optional[List[RoadLandmark]] = None,
         show_landmarks: bool = True,
+        ego_only: bool = True,
     ) -> np.ndarray:
         """
         Draws comprehensive annotations on the given frame.
@@ -55,12 +56,13 @@ class VideoAnnotator:
             self._draw_landmarks(vis, landmarks)
 
         # 1. Top HUD: Ego Vehicle Telemetry
-        self._draw_ego_hud(vis, ego_speed, timestamp, frame_idx)
+        self._draw_ego_hud(vis, ego_speed, timestamp, frame_idx, ego_only=ego_only)
 
-        # 2. Draw tracks and speed tags
-        for track in tracks:
-            tid = track.track_id
-            speed_res = speed_results.get(tid)
+        # 2. Draw tracks and speed tags (Dormant when ego_only=True)
+        if not ego_only:
+            for track in tracks:
+                tid = track.track_id
+                speed_res = speed_results.get(tid)
 
             # Choose box color based on direction
             color = self._get_color_for_direction(
@@ -147,35 +149,39 @@ class VideoAnnotator:
         ego_speed: Optional[EgoSpeedResult],
         timestamp: float,
         frame_idx: int,
+        ego_only: bool = False,
     ) -> None:
         """Draws top HUD banner with Ego speed and timestamp."""
         h, w = vis.shape[:2]
-        banner_h = 55
+        banner_h = 58
 
         overlay = vis.copy()
         cv2.rectangle(overlay, (0, 0), (w, banner_h), (20, 20, 20), -1)
-        cv2.addWeighted(overlay, 0.7, vis, 0.3, 0, vis)
+        cv2.addWeighted(overlay, 0.75, vis, 0.25, 0, vis)
         cv2.line(vis, (0, banner_h), (w, banner_h), (80, 80, 80), 1)
 
         # Timecode
         mins = int(timestamp // 60)
         secs = timestamp % 60
         time_str = f"{mins:02d}:{secs:05.2f} (F#{frame_idx:04d})"
-        cv2.putText(vis, time_str, (20, 35), self.font, 0.65, (200, 200, 200), 1, cv2.LINE_AA)
+        cv2.putText(vis, time_str, (20, 36), self.font, 0.65, (200, 200, 200), 1, cv2.LINE_AA)
+
+        if ego_only:
+            cv2.putText(vis, "[EGO SPEED MODE]", (260, 36), self.font, 0.50, (0, 220, 255), 1, cv2.LINE_AA)
 
         # Ego Speed & Grid Telemetry
         if ego_speed and ego_speed.speed_kmh is not None:
-            ego_text = f"EGO: {ego_speed.speed_kmh:.1f} km/h"
-            cv2.putText(vis, ego_text, (w - 480, 35), self.font, 0.75, (50, 255, 50), 2, cv2.LINE_AA)
+            ego_text = f"EGO SPEED: {ego_speed.speed_kmh:.1f} km/h"
+            cv2.putText(vis, ego_text, (w - 530, 37), self.font, 0.80, (50, 255, 50), 2, cv2.LINE_AA)
 
             if ego_speed.squares_passed_per_second is not None:
                 grid_info = f"Grid: {ego_speed.squares_passed_per_second:.1f} sq/s ({ego_speed.grid_square_size_m:.1f}m)"
-                cv2.putText(vis, grid_info, (w - 280, 35), self.font, 0.52, (0, 220, 255), 1, cv2.LINE_AA)
+                cv2.putText(vis, grid_info, (w - 260, 36), self.font, 0.52, (0, 220, 255), 1, cv2.LINE_AA)
 
             conf_text = f"{ego_speed.confidence * 100:.0f}%"
-            cv2.putText(vis, conf_text, (w - 70, 35), self.font, 0.55, (180, 180, 180), 1, cv2.LINE_AA)
+            cv2.putText(vis, conf_text, (w - 65, 36), self.font, 0.55, (180, 180, 180), 1, cv2.LINE_AA)
         else:
-            cv2.putText(vis, "EGO SPEED: Estimating via Road Grid...", (w - 460, 35), self.font, 0.60, (100, 200, 255), 1, cv2.LINE_AA)
+            cv2.putText(vis, "EGO SPEED: Estimating via Road Grid...", (w - 460, 36), self.font, 0.60, (100, 200, 255), 1, cv2.LINE_AA)
 
     def _draw_label_badge(
         self,
